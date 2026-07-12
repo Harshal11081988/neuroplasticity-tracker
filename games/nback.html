@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #0f1116; color: #e8e8e8; margin: 0; padding: 20px;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  #setup { text-align: center; }
+  select, button {
+    font-size: 16px; padding: 10px 20px; margin: 8px; border-radius: 8px;
+    border: none; cursor: pointer;
+  }
+  button { background: #4f8cff; color: white; font-weight: 600; }
+  button:hover { background: #3d75e0; }
+  button:disabled { background: #555; cursor: not-allowed; }
+  #stimulus-box {
+    width: 200px; height: 200px; display: flex; align-items: center; justify-content: center;
+    font-size: 80px; font-weight: bold; background: #1c1f2a; border-radius: 16px;
+    margin: 20px 0; border: 3px solid #333;
+  }
+  #stimulus-box.flash { border-color: #4f8cff; }
+  #progress { font-size: 14px; color: #999; margin-bottom: 10px; }
+  #results { text-align: center; }
+  .metric { display: inline-block; margin: 10px 16px; }
+  .metric-value { font-size: 28px; font-weight: bold; color: #4f8cff; }
+  .metric-label { font-size: 13px; color: #999; }
+  #copy-box {
+    background: #1c1f2a; padding: 12px; border-radius: 8px; margin-top: 16px;
+    font-family: monospace; font-size: 13px; word-break: break-all; max-width: 500px;
+  }
+  #copy-status { color: #6fcf97; font-size: 13px; margin-top: 6px; height: 16px; }
+  #instructions { max-width: 500px; text-align: center; color: #ccc; font-size: 14px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div id="setup">
+  <h2>🧠 N-Back Working Memory Task</h2>
+  <p id="instructions">
+    Letters will appear one at a time. Press <b>SPACE</b> or tap the button
+    whenever the current letter matches the one shown <b>N steps back</b>.
+  </p>
+  <div>
+    <label>Difficulty: </label>
+    <select id="n-select">
+      <option value="1">1-Back (easier)</option>
+      <option value="2" selected>2-Back (standard)</option>
+      <option value="3">3-Back (hard)</option>
+    </select>
+  </div>
+  <button id="start-btn">Start Task</button>
+</div>
+
+<div id="game" style="display:none;">
+  <div id="progress"></div>
+  <div id="stimulus-box"></div>
+  <button id="match-btn">MATCH (Space)</button>
+</div>
+
+<div id="results" style="display:none;"></div>
+
+<script>
+// ---- Pure logic (validated with Node before embedding here) ----
+function generateSequence(length, n, alphabet, targetRate) {
+  const sequence = [];
+  for (let i = 0; i < length; i++) {
+    let stimulus, isMatch = false;
+    if (i >= n && Math.random() < targetRate) {
+      stimulus = sequence[i - n].stimulus;
+      isMatch = true;
+    } else {
+      do {
+        stimulus = alphabet[Math.floor(Math.random() * alphabet.length)];
+      } while (i >= n && stimulus === sequence[i - n].stimulus);
+    }
+    sequence.push({ stimulus, isMatch });
+  }
+  return sequence;
+}
+
+function scoreResponses(sequence, responses, reactionTimesMs) {
+  let hits = 0, misses = 0, falseAlarms = 0, correctRejections = 0;
+  const hitRTs = [];
+  for (let i = 0; i < sequence.length; i++) {
+    const truth = sequence[i].isMatch, responded = responses[i];
+    if (truth && responded) { hits++; if (!isNaN(reactionTimesMs[i])) hitRTs.push(reactionTimesMs[i]); }
+    else if (truth && !responded) misses++;
+    else if (!truth && responded) falseAlarms++;
+    else correctRejections++;
+  }
+  const totalTargets = hits + misses;
+  const totalNonTargets = falseAlarms + correctRejections;
+  const accuracy = sequence.length > 0 ? (hits + correctRejections) / sequence.length : 0;
+  const avgHitRT = hitRTs.length > 0 ? hitRTs.reduce((a,b)=>a+b,0)/hitRTs.length : null;
+  return { hits, misses, falseAlarms, correctRejections, totalTargets, totalNonTargets, accuracy, avgHitRT };
+}
+
+// ---- Game state & loop ----
+const ALPHABET = ["B","C","D","F","G","H","K","L"];
+const SEQUENCE_LENGTH = 22;
+const STIMULUS_MS = 600;
+const ISI_MS = 1800; // total time per trial including stimulus display
+
+let n, sequence, responses, reactionTimes, trialIndex, trialStartTime, responded;
+
+document.getElementById("start-btn").onclick = () => {
+  n = parseInt(document.getElementById("n-select").value);
+  sequence = generateSequence(SEQUENCE_LENGTH, n, ALPHABET, 0.35);
+  responses = new Array(SEQUENCE_LENGTH).fill(false);
+  reactionTimes = new Array(SEQUENCE_LENGTH).fill(NaN);
+  trialIndex = 0;
+  document.getElementById("setup").style.display = "none";
+  document.getElementById("game").style.display = "flex";
+  document.getElementById("game").style.flexDirection = "column";
+  document.getElementById("game").style.alignItems = "center";
+  runTrial();
+};
+
+function runTrial() {
+  if (trialIndex >= SEQUENCE_LENGTH) { endGame(); return; }
+  const box = document.getElementById("stimulus-box");
+  const item = sequence[trialIndex];
+  document.getElementById("progress").textContent = `Trial ${trialIndex + 1} / ${SEQUENCE_LENGTH}`;
+  box.textContent = item.stimulus;
+  box.classList.add("flash");
+  responded = false;
+  trialStartTime = performance.now();
+
+  setTimeout(() => { box.classList.remove("flash"); }, STIMULUS_MS);
+  setTimeout(() => {
+    box.textContent = "";
+    trialIndex++;
+    runTrial();
+  }, ISI_MS);
+}
+
+function respond() {
+  if (responded || trialIndex >= SEQUENCE_LENGTH) return;
+  responded = true;
+  responses[trialIndex] = true;
+  reactionTimes[trialIndex] = performance.now() - trialStartTime;
+}
+
+document.getElementById("match-btn").onclick = respond;
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && document.getElementById("game").style.display !== "none") {
+    e.preventDefault();
+    respond();
+  }
+});
+
+function endGame() {
+  document.getElementById("game").style.display = "none";
+  const score = scoreResponses(sequence, responses, reactionTimes);
+  const accuracyPct = (score.accuracy * 100).toFixed(0);
+  const avgRT = score.avgHitRT ? Math.round(score.avgHitRT) : "N/A";
+  const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const logLine = `${now} | N-Back(${n}) | Accuracy: ${accuracyPct}% | Hits: ${score.hits} | Misses: ${score.misses} | FalseAlarms: ${score.falseAlarms} | AvgRT: ${avgRT}ms`;
+
+  document.getElementById("results").style.display = "block";
+  document.getElementById("results").innerHTML = `
+    <h2>Results</h2>
+    <div class="metric"><div class="metric-value">${accuracyPct}%</div><div class="metric-label">Accuracy</div></div>
+    <div class="metric"><div class="metric-value">${score.hits}</div><div class="metric-label">Hits</div></div>
+    <div class="metric"><div class="metric-value">${score.misses}</div><div class="metric-label">Misses</div></div>
+    <div class="metric"><div class="metric-value">${score.falseAlarms}</div><div class="metric-label">False Alarms</div></div>
+    <div class="metric"><div class="metric-value">${avgRT}</div><div class="metric-label">Avg RT (ms)</div></div>
+    <p style="color:#999; font-size:13px; margin-top:16px;">Copy this line and paste it into the "Log a result" box in the app to track it on your progress dashboard:</p>
+    <div id="copy-box">${logLine}</div>
+    <button id="copy-btn" style="margin-top:10px;">Copy to Clipboard</button>
+    <div id="copy-status"></div>
+    <button id="retry-btn" style="margin-top:16px; background:#333;">Try Again</button>
+  `;
+
+  document.getElementById("copy-btn").onclick = () => {
+    navigator.clipboard.writeText(logLine).then(() => {
+      document.getElementById("copy-status").textContent = "Copied!";
+    }).catch(() => {
+      document.getElementById("copy-status").textContent = "Copy failed — select the text above manually.";
+    });
+  };
+  document.getElementById("retry-btn").onclick = () => {
+    document.getElementById("results").style.display = "none";
+    document.getElementById("setup").style.display = "block";
+  };
+}
+</script>
+</body>
+</html>

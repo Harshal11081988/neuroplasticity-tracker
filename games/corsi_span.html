@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #0f1116; color: #e8e8e8; margin: 0; padding: 20px;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  button {
+    font-size: 16px; padding: 10px 20px; margin: 8px; border-radius: 8px;
+    border: none; cursor: pointer; background: #4f8cff; color: white; font-weight: 600;
+  }
+  button:hover { background: #3d75e0; }
+  #grid {
+    display: grid; grid-template-columns: repeat(3, 80px); grid-gap: 12px; margin: 20px 0;
+  }
+  .block {
+    width: 80px; height: 80px; background: #1c1f2a; border-radius: 12px;
+    border: 3px solid #333; cursor: pointer; transition: background 0.15s;
+  }
+  .block.flash { background: #4f8cff; border-color: #7fb0ff; }
+  .block.clicked { background: #6fcf97; }
+  .block.wrong { background: #eb5757; }
+  #status { font-size: 15px; color: #ccc; margin: 10px 0; min-height: 20px; }
+  #instructions { max-width: 500px; text-align: center; color: #ccc; font-size: 14px; line-height: 1.5; }
+  #results { text-align: center; }
+  .metric-value { font-size: 32px; font-weight: bold; color: #4f8cff; }
+  .metric-label { font-size: 13px; color: #999; }
+  #copy-box {
+    background: #1c1f2a; padding: 12px; border-radius: 8px; margin-top: 16px;
+    font-family: monospace; font-size: 13px; word-break: break-all; max-width: 500px;
+  }
+  #copy-status { color: #6fcf97; font-size: 13px; margin-top: 6px; height: 16px; }
+</style>
+</head>
+<body>
+
+<div id="setup">
+  <h2>🔷 Corsi Block-Tapping Span</h2>
+  <p id="instructions">
+    A sequence of blocks will light up one at a time. After the sequence ends,
+    click the blocks back <b>in the same order</b>. The sequence gets one block
+    longer each round. The test ends after two consecutive mistakes — your
+    <b>span</b> is the longest sequence you correctly reproduced.
+  </p>
+  <button id="start-btn">Start Task</button>
+</div>
+
+<div id="game" style="display:none;">
+  <div id="status"></div>
+  <div id="grid"></div>
+</div>
+
+<div id="results" style="display:none;"></div>
+
+<script>
+// ---- Pure logic (validated with Node before embedding here) ----
+function generateSequence(length, numBlocks) {
+  const sequence = [];
+  for (let i = 0; i < length; i++) {
+    let block;
+    do { block = Math.floor(Math.random() * numBlocks); }
+    while (i > 0 && block === sequence[i - 1]);
+    sequence.push(block);
+  }
+  return sequence;
+}
+
+function checkSequence(userClicks, correctSequence) {
+  if (userClicks.length !== correctSequence.length) {
+    const minLen = Math.min(userClicks.length, correctSequence.length);
+    for (let i = 0; i < minLen; i++) {
+      if (userClicks[i] !== correctSequence[i]) return { correct: false, firstErrorIndex: i };
+    }
+    return { correct: false, firstErrorIndex: minLen };
+  }
+  for (let i = 0; i < correctSequence.length; i++) {
+    if (userClicks[i] !== correctSequence[i]) return { correct: false, firstErrorIndex: i };
+  }
+  return { correct: true, firstErrorIndex: null };
+}
+
+function computeFinalSpan(trialHistory) {
+  let maxCorrectSpan = 0;
+  for (const trial of trialHistory) {
+    if (trial.correct && trial.span > maxCorrectSpan) maxCorrectSpan = trial.span;
+  }
+  return maxCorrectSpan;
+}
+
+// ---- Game state & loop ----
+const NUM_BLOCKS = 9;
+const FLASH_MS = 700;
+const GAP_MS = 300;
+const START_SPAN = 2;
+
+let currentSpan, consecutiveFails, trialHistory, sequence, userClicks, accepting;
+
+function buildGrid() {
+  const grid = document.getElementById("grid");
+  grid.innerHTML = "";
+  for (let i = 0; i < NUM_BLOCKS; i++) {
+    const div = document.createElement("div");
+    div.className = "block";
+    div.dataset.index = i;
+    div.onclick = () => handleClick(i, div);
+    grid.appendChild(div);
+  }
+}
+
+document.getElementById("start-btn").onclick = () => {
+  currentSpan = START_SPAN;
+  consecutiveFails = 0;
+  trialHistory = [];
+  document.getElementById("setup").style.display = "none";
+  document.getElementById("game").style.display = "flex";
+  document.getElementById("game").style.flexDirection = "column";
+  document.getElementById("game").style.alignItems = "center";
+  buildGrid();
+  runRound();
+};
+
+function runRound() {
+  document.getElementById("status").textContent = `Span ${currentSpan}: watch the sequence...`;
+  sequence = generateSequence(currentSpan, NUM_BLOCKS);
+  userClicks = [];
+  accepting = false;
+  playSequence(0);
+}
+
+function playSequence(i) {
+  if (i >= sequence.length) {
+    accepting = true;
+    document.getElementById("status").textContent = `Your turn — click the blocks in order (${sequence.length} blocks)`;
+    return;
+  }
+  const blocks = document.querySelectorAll(".block");
+  const el = blocks[sequence[i]];
+  el.classList.add("flash");
+  setTimeout(() => {
+    el.classList.remove("flash");
+    setTimeout(() => playSequence(i + 1), GAP_MS);
+  }, FLASH_MS);
+}
+
+function handleClick(index, el) {
+  if (!accepting) return;
+  userClicks.push(index);
+  el.classList.add("clicked");
+  setTimeout(() => el.classList.remove("clicked"), 300);
+
+  if (userClicks.length === sequence.length) {
+    accepting = false;
+    const result = checkSequence(userClicks, sequence);
+    trialHistory.push({ span: currentSpan, correct: result.correct });
+
+    if (result.correct) {
+      consecutiveFails = 0;
+      document.getElementById("status").textContent = "Correct! Next round...";
+      currentSpan++;
+      setTimeout(runRound, 1000);
+    } else {
+      consecutiveFails++;
+      document.getElementById("status").textContent = "Not quite.";
+      if (consecutiveFails >= 2) {
+        setTimeout(endGame, 1000);
+      } else {
+        setTimeout(runRound, 1200);
+      }
+    }
+  }
+}
+
+function endGame() {
+  document.getElementById("game").style.display = "none";
+  const finalSpan = computeFinalSpan(trialHistory);
+  const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const logLine = `${now} | Corsi Span | Final Span: ${finalSpan}`;
+
+  document.getElementById("results").style.display = "block";
+  document.getElementById("results").innerHTML = `
+    <h2>Results</h2>
+    <div class="metric-value">${finalSpan}</div>
+    <div class="metric-label">Longest correct span</div>
+    <p style="color:#999; font-size:13px; margin-top:16px;">Copy this line and paste it into the "Log a result" box in the app to track it on your progress dashboard:</p>
+    <div id="copy-box">${logLine}</div>
+    <button id="copy-btn" style="margin-top:10px;">Copy to Clipboard</button>
+    <div id="copy-status"></div>
+    <button id="retry-btn" style="margin-top:16px; background:#333;">Try Again</button>
+  `;
+
+  document.getElementById("copy-btn").onclick = () => {
+    navigator.clipboard.writeText(logLine).then(() => {
+      document.getElementById("copy-status").textContent = "Copied!";
+    }).catch(() => {
+      document.getElementById("copy-status").textContent = "Copy failed — select the text above manually.";
+    });
+  };
+  document.getElementById("retry-btn").onclick = () => {
+    document.getElementById("results").style.display = "none";
+    document.getElementById("setup").style.display = "block";
+  };
+}
+</script>
+</body>
+</html>
